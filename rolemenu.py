@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, String, Column, ForeignKey, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 
-rolemenu_db = create_engine("sqlite:///rolemenu.db", echo=True)
+rolemenu_db = create_engine("sqlite:///rolemenu.db")
 
 Base = declarative_base()
 
@@ -54,10 +54,8 @@ def emoji_convert_to_id(emoji):
 
 async def id_convert_to_emoji(id: str):
     if len(id) > 17 and "," not in id: # probably a snowflake
-        print(f"{id}")
         for guild in client.guilds:
             for e in guild.emojis:
-                print(f"{e.id} {e.name}")
                 if id in str(e.url).split("/")[-1]:
                     return e
     else:
@@ -70,7 +68,6 @@ async def on_raw_reaction_add(payload):
     result = session.query(Reaction).get(f"{payload.message_id}_{emoji_convert_to_id(payload.emoji)}")
     if not result:
         return
-    print(f"looking for {repr(result.role)}")
     guild_roles = await client.get_guild(payload.guild_id).fetch_roles()
     await payload.member.add_roles(discord.utils.get(guild_roles, id=result.role), reason=f"Reaction on {payload.message_id}")
 
@@ -81,7 +78,6 @@ async def on_raw_reaction_remove(payload):
     result = session.query(Reaction).get(f"{payload.message_id}_{emoji_convert_to_id(payload.emoji)}")
     if not result:
         return
-    print(f"looking for {result.role}")
     guild = client.get_guild(payload.guild_id)
     guild_roles = await guild.fetch_roles()
     member = guild.get_member(payload.user_id)
@@ -105,15 +101,12 @@ async def on_message(message):
         else:
             msg_guild_id, msg_channel_id, msg_id = msg.split("/")[-3:]
         channel = await client.fetch_channel(msg_channel_id)
-        print(channel)
         msg_obj = await channel.fetch_message(msg_id)
         msg_orm = Message(message_id=msg_id, creator=message.author.id)
         session.add(msg_orm)
         errors = []
         for item in menu_items:
             emoji, role = item.split("=")
-            print(repr(emoji))
-            print(repr(role))
             emoji_id = emoji_convert_to_id(emoji)
             if not emoji_id:
                 errors.append(f"Skipped {item}, couldn't turn {emoji} into a unique ID")
