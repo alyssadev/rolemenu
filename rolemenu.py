@@ -1,37 +1,39 @@
 #!/usr/bin/env python3
 import discord
-from sqlalchemy import create_engine, String, Column
+from sqlalchemy import create_engine, String, Column, ForeignKey, Integer
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, relationship
 
 rolemenu_db = create_engine("sqlite:///rolemenu.db", echo=True)
 
 Base = declarative_base()
 
-class Messages(Base):
+class Message(Base):
     __tablename__ = "messages"
     # message_id: discord snowflake of message with attached reactions
     message_id = Column(String, primary_key=True)
     # creator: discord snowflake of user that created the role menu
     creator = Column(String)
+    reactions = relationship("Reaction", back_populates="message", cascade="all, delete, delete-orphan")
 
-class Reactions(Base):
+class Reaction(Base):
     __tablename__ = "reactions"
     # id: {message_snowflake}_{emoji_id}
     id = Column(String, primary_key=True)
     # message: discord snowflake of message linked to this reaction
-    message = Column(String)
-    # emoji: to be determined. custom emoji can be defined with snowflake, unicode though?
+    message_id = Column(String, ForeignKey("messages.message_id"))
+    message = relationship("Message", back_populates="reactions")
+    # emoji: either snowflake id, or unicode codepoints encoded as comma separated hex numbers
     emoji = Column(String)
     # role: role snowflake
-    role = Column(String)
+    role = Column(Integer)
 
 Base.metadata.create_all(rolemenu_db)
 
 Session = sessionmaker(bind = rolemenu_db)
 session = Session()
 
-client = discord.Client(intents=Intents(
+client = discord.Client(intents=discord.Intents(
     guilds=True,
     members=True,
     emojis=True,
@@ -39,18 +41,52 @@ client = discord.Client(intents=Intents(
     reactions=True
 ))
 
-def emoji_convert_to_id(emoji: discord.PartialEmoji):
-    if emoji.id:
-        return emoji.id
-    return ",".join(f"0x{ord(c):08x}" for c in emoji.name)
+def emoji_convert_to_id(emoji):
+    if type(emoji) is discord.PartialEmoji:
+        if emoji.id:
+            return emoji.id
+        return ",".join(f"{ord(c):x}" for c in emoji.name)
+    else:
+        if emoji[0] == "<" and emoji[-1] == ">":
+            anim,tag,emoji_id = emoji[1:-1].split(":")
+            return emoji_id
+        return ",".join(f"{ord(c):x}" for c in emoji)
+
+async def id_convert_to_emoji(id: str):
+    if len(id) > 17 and "," not in id: # probably a snowflake
+        print(f"{id}")
+        for guild in client.guilds:
+            for e in guild.emojis:
+                print(f"{e.id} {e.name}")
+                if id in str(e.url).split("/")[-1]:
+                    return e
+    else:
+        return "".join(chr(int(f'0x{c}',16)) for c in id.split(","))
 
 @client.event
 async def on_raw_reaction_add(payload):
-    result = session.query(Reactions).get(f"{payload.message_id}_{emoji_convert_to_id(payload.emoji)")
+    if payload.member == client.user:
+        return
+    result = session.query(Reaction).get(f"{payload.message_id}_{emoji_convert_to_id(payload.emoji)}")
     if not result:
         return
-    for reaction in result:
-        await payload.member.add_roles(discord.abc.Snowflake(id=reaction.role), reason=f"Reaction on {payload.message_id}")
+    print(f"looking for {repr(result.role)}")
+    guild_roles = await client.get_guild(payload.guild_id).fetch_roles()
+    await payload.member.add_roles(discord.utils.get(guild_roles, id=result.role), reason=f"Reaction on {payload.message_id}")
+
+@client.event
+async def on_raw_reaction_remove(payload):
+    if payload.user_id == client.user.id:
+        return
+    result = session.query(Reaction).get(f"{payload.message_id}_{emoji_convert_to_id(payload.emoji)}")
+    if not result:
+        return
+    print(f"looking for {result.role}")
+    guild = client.get_guild(payload.guild_id)
+    guild_roles = await guild.fetch_roles()
+    member = guild.get_member(payload.user_id)
+    await member.remove_roles(discord.utils.get(guild_roles, id=result.role), reason=f"Reaction on {payload.message_id}")
+    
 
 @client.event
 async def on_message(message):
@@ -60,18 +96,49 @@ async def on_message(message):
     if message.content.startswith("!rolemenu") and (len(message.content) == 9 or message.content[9] == " "):
         cmd, *args = message.content.split()
         if not args:
-            await message.reply("`!rolemenu <message ID or link> :emoji1:=role1 :emoji2:=role2`")
+            await message.reply("`!rolemenu <message link (not ID)> :emoji1:=role1 :emoji2:=role2`")
             return
         msg, *menu_items = args
         if msg.isdigit():
-            msg_id = msg
+            await message.reply("`!rolemenu <message link (not ID)> :emoji1:=role1 :emoji2:=role2`")
+            return
         else:
-            msg_id = msg.split("/")[-1]
+            msg_guild_id, msg_channel_id, msg_id = msg.split("/")[-3:]
+        channel = await client.fetch_channel(msg_channel_id)
+        print(channel)
+        msg_obj = await channel.fetch_message(msg_id)
+        msg_orm = Message(message_id=msg_id, creator=message.author.id)
+        session.add(msg_orm)
+        errors = []
         for item in menu_items:
             emoji, role = item.split("=")
             print(repr(emoji))
             print(repr(role))
-        await message.reply("WIP")
+            emoji_id = emoji_convert_to_id(emoji)
+            if not emoji_id:
+                errors.append(f"Skipped {item}, couldn't turn {emoji} into a unique ID")
+                continue
+            try:
+                role_id = discord.utils.get(message.guild.roles, name=role).id
+            except AttributeError:
+                errors.append(f"Skipped {item}, role not found (case sensitive!)")
+                continue
+            e = await id_convert_to_emoji(emoji_id)
+            if not e:
+                errors.append(f"Skipped {item}, I don't have access to {emoji}")
+                continue
+            await msg_obj.add_reaction(e)
+            reaction_orm = Reaction(
+                    id=f"{msg_id}_{emoji_id}",
+                    message=msg_orm,
+                    emoji=emoji_id,
+                    role=role_id)
+            session.add(reaction_orm)
+        if not errors:
+            session.commit()
+        else:
+            session.rollback()
+        await message.reply("Role menu configur" + ( ("ation errored:\n" + "\n".join(errors) ) if errors else "ed") )
 
     if message.content.startswith("!norolemenu") and (len(message.content) == 11 or message.content[11] == " "):
         cmd, *args = message.content.split()
@@ -85,6 +152,24 @@ async def on_message(message):
             msg_id = msg.split("/")[-1]
         
         msg_results = session.query(Messages).filter(Messages.message_id == msg_id)
-        react_results = session.query(Reactions).filter(Reactions.message == msg_id)
         for result in msg_results:
+            session.delete(result)
+        session.commit()
 
+@client.event
+async def on_ready():
+    print(f"Logged in as {client.user.name} ({client.user.id})")
+    print(discord.utils.oauth_url(client.user.id, permissions=discord.Permissions(
+        add_reactions=True,
+        change_nickname=True,
+        external_emojis=True,
+        manage_messages=True,
+        manage_roles=True,
+        read_messages=True,
+        read_message_history=True,
+        send_messages=True
+    )))
+
+if __name__ == "__main__":
+    with open(".bottoken") as f:
+        client.run(f.read().strip())
