@@ -128,7 +128,7 @@ async def on_message(message):
             if len(args) == 1:
                 await message.reply("`!rolemenu addmodrole role1 role2`")
                 return
-            roles = args[2:]
+            roles = args[1:]
             errors = []
             print("starting on " + str(roles))
             for role in roles:
