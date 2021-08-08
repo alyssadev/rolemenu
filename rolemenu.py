@@ -105,7 +105,7 @@ async def on_message(message):
             return True
         if admin_only:
             return False
-        result = ModRole.query.filter(ModRole.guild_id == message.guild.id)
+        result = session.query(ModRole).filter(ModRole.guild_id == message.guild.id)
         if not result:
             return False
         for r in result:
@@ -136,7 +136,7 @@ async def on_message(message):
                 except AttributeError:
                     errors.append(f"Skipped {item}, role not found (case sensitive!)")
                     continue
-                guild = Guild.query.get(message.guild.id)
+                guild = session.query(Guild).get(message.guild.id)
                 if not guild:
                     guild = Guild(guild_id=message.guild.id)
                     session.add(guild)
