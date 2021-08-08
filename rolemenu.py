@@ -130,16 +130,19 @@ async def on_message(message):
                 return
             roles = args[2:]
             errors = []
+            print("starting on " + str(roles))
             for role in roles:
                 try:
                     role_id = discord.utils.get(message.guild.roles, name=role).id
                 except AttributeError:
                     errors.append(f"Skipped {item}, role not found (case sensitive!)")
                     continue
+                print(f"got id {role_id}")
                 guild = session.query(Guild).get(message.guild.id)
                 if not guild:
                     guild = Guild(guild_id=message.guild.id)
                     session.add(guild)
+                    print("added new guild")
                 modrole_orm = ModRole(
                         role=role_id,
                         guild=guild
