@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, String, Column, ForeignKey, Integer
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 
-rolemenu_db = create_engine("sqlite:///rolemenu.db")
+rolemenu_db = create_engine("sqlite:///rolemenu.db", echo=True)
 
 Base = declarative_base()
 
