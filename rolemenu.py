@@ -239,7 +239,7 @@ async def on_message(message):
             channel = await client.fetch_channel(msg_channel_id)
             msg_obj = await channel.fetch_message(msg_id)
         
-            msg_results = session.query(Messages).filter(Messages.message_id == msg_id)
+            msg_results = session.query(Message).filter(Message.message_id == msg_id)
             for result in msg_results:
                 try:
                     e = await id_convert_to_emoji(result.emoji_id)
