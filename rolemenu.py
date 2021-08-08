@@ -121,6 +121,7 @@ async def on_message(message):
         if not args:
             await message.reply("`!rolemenu <message link (not ID)> :emoji1:=role1 :emoji2:=role2`")
             return
+
         if args[0] == "addmodrole":
             if not permission_check(message.author, admin_only=True):
                 await message.reply("You can't use this command.")
@@ -154,6 +155,33 @@ async def on_message(message):
                 session.rollback()
             await message.reply("Mod role configur" + ( ("ation errored:\n" + "\n".join(errors) ) if errors else "ed") )
             return
+
+        if args[0] == "nomodrole":
+            if not permission_check(message.author, admin_only=True):
+                await message.reply("You can't use this command.")
+                return
+            if len(args) == 1:
+                await message.reply("`!rolemenu nomodrole role1 role2`")
+                return
+            roles = args[1:]
+            errors = []
+            print("starting on " + str(roles))
+            for role in roles:
+                try:
+                    role_id = discord.utils.get(message.guild.roles, name=role).id
+                except AttributeError:
+                    errors.append(f"Skipped {item}, role not found (case sensitive!)")
+                    continue
+                print(f"got id {role_id}")
+                modrole_orm = session.query(ModRole).get(role_id)
+                session.delete(modrole_orm)
+            if not errors:
+                session.commit()
+            else:
+                session.rollback()
+            await message.reply("Mod role remov" + ( ("al errored:\n" + "\n".join(errors) ) if errors else "ed") )
+            return
+
         msg, *menu_items = args
         if msg.isdigit():
             await message.reply("`!rolemenu <message link (not ID)> :emoji1:=role1 :emoji2:=role2`")
@@ -200,18 +228,27 @@ async def on_message(message):
             return
         cmd, *args = message.content.split()
         if not args:
-            await message.reply("`!norolemenu <message ID or link>`")
+            await message.reply("`!norolemenu <message link>`")
             return
-        msg = args[0]
-        if msg.isdigit():
-            msg_id = msg
-        else:
-            msg_id = msg.split("/")[-1]
+        for msg in args:
+            if msg.isdigit():
+                await message.reply("`!norolemenu <message link (not ID)>`")
+                return
+            else:
+                msg_guild_id, msg_channel_id, msg_id = msg.split("/")[-3:]
+            channel = await client.fetch_channel(msg_channel_id)
+            msg_obj = await channel.fetch_message(msg_id)
         
-        msg_results = session.query(Messages).filter(Messages.message_id == msg_id)
-        for result in msg_results:
-            session.delete(result)
+            msg_results = session.query(Messages).filter(Messages.message_id == msg_id)
+            for result in msg_results:
+                try:
+                    e = await id_convert_to_emoji(result.emoji_id)
+                    await msg_obj.remove_reaction(e)
+                except:
+                    pass
+                session.delete(result)
         session.commit()
+        return
 
 @client.event
 async def on_ready():
