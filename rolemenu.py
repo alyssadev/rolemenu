@@ -8,6 +8,17 @@ rolemenu_db = create_engine("sqlite:///rolemenu.db")
 
 Base = declarative_base()
 
+class Guild(Base):
+    __tablename__ = "guilds"
+    guild_id = Column(Integer, primary_key=True)
+    mod_roles = relationship("ModRole", back_populates="guild", cascade="all, delete, delete-orphan")
+
+class ModRole(Base):
+    __tablename__ = "modroles"
+    role = Column(Integer, primary_key=True)
+    guild_id = Column(String, ForeignKey("guilds.guild_id"))
+    guild = relationship("Guild", back_populates="mod_roles")
+
 class Message(Base):
     __tablename__ = "messages"
     # message_id: discord snowflake of message with attached reactions
@@ -82,17 +93,63 @@ async def on_raw_reaction_remove(payload):
     guild_roles = await guild.fetch_roles()
     member = guild.get_member(payload.user_id)
     await member.remove_roles(discord.utils.get(guild_roles, id=result.role), reason=f"Reaction on {payload.message_id}")
-    
 
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
+    def permission_check(author, admin_only = False):
+        perms = author.permissions_in(message.channel)
+        if perms.administrator or perms.manage_roles:
+            return True
+        if admin_only:
+            return False
+        result = ModRole.query.filter(ModRole.guild_id == message.guild.id)
+        if not result:
+            return False
+        for r in result:
+            if r.role in [_.id for _ in author.roles]:
+                return True
+        return False
+
     if message.content.startswith("!rolemenu") and (len(message.content) == 9 or message.content[9] == " "):
+        if not permission_check(message.author):
+            await message.reply("You can't use this command.")
+            return
         cmd, *args = message.content.split()
         if not args:
             await message.reply("`!rolemenu <message link (not ID)> :emoji1:=role1 :emoji2:=role2`")
+            return
+        if args[0] == "addmodrole":
+            if not permission_check(message.author, admin_only=True):
+                await message.reply("You can't use this command.")
+                return
+            if len(args) == 1:
+                await message.reply("`!rolemenu addmodrole role1 role2`")
+                return
+            roles = args[2:]
+            errors = []
+            for role in roles:
+                try:
+                    role_id = discord.utils.get(message.guild.roles, name=role).id
+                except AttributeError:
+                    errors.append(f"Skipped {item}, role not found (case sensitive!)")
+                    continue
+                guild = Guild.query.get(message.guild.id)
+                if not guild:
+                    guild = Guild(guild_id=message.guild.id)
+                    session.add(guild)
+                modrole_orm = ModRole(
+                        role=role_id,
+                        guild=guild
+                )
+                session.add(modrole_orm)
+            if not errors:
+                session.commit()
+            else:
+                session.rollback()
+            await message.reply("Mod role configur" + ( ("ation errored:\n" + "\n".join(errors) ) if errors else "ed") )
             return
         msg, *menu_items = args
         if msg.isdigit():
@@ -132,8 +189,12 @@ async def on_message(message):
         else:
             session.rollback()
         await message.reply("Role menu configur" + ( ("ation errored:\n" + "\n".join(errors) ) if errors else "ed") )
+        return
 
     if message.content.startswith("!norolemenu") and (len(message.content) == 11 or message.content[11] == " "):
+        if not permission_check(message.author):
+            await message.reply("You can't use this command.")
+            return
         cmd, *args = message.content.split()
         if not args:
             await message.reply("`!norolemenu <message ID or link>`")
